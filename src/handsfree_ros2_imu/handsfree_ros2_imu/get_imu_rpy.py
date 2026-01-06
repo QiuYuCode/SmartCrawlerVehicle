@@ -6,7 +6,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
-from tf_transformations import euler_from_quaternion
+from handsfree_ros2_imu.transforms import euler_from_quaternion
 import math
 
 

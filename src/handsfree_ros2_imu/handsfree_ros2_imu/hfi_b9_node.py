@@ -10,7 +10,7 @@ import serial.tools.list_ports
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, MagneticField
-from tf_transformations import quaternion_from_euler
+from handsfree_ros2_imu.transforms import quaternion_from_euler
 
 
 def find_ttyUSB():
