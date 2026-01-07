@@ -1,0 +1,10 @@
+# HandsFree IMU udev rules
+# 将此文件复制到 /etc/udev/rules.d/ 目录
+# sudo cp 99-handsfree-imu.rules /etc/udev/rules.d/
+# sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# HandsFree IMU (CP2102/CP2104 USB to UART - Silicon Labs)
+# idVendor=10c4, idProduct=ea60, serial=0001
+# 使用序列号区分，避免与其他 CP2102 设备（如 RPLidar）冲突
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", MODE="0666", SYMLINK+="HFRobotIMU"
+
