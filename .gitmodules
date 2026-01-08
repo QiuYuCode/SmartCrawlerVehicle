@@ -4,5 +4,11 @@
 	branch = ros2
 [submodule "src/realsense-ros"]
 	path = src/realsense-ros
-	url = https://github.com/IntelRealSense/realsense-ros.git
+	url = https://wget.la/https://github.com/IntelRealSense/realsense-ros.git
 	branch = ros2-development
+[submodule "src/ugv_sdk"]
+	path = src/ugv_sdk
+	url = https://wget.la/https://github.com/agilexrobotics/ugv_sdk.git
+[submodule "src/bunker_ros2"]
+	path = src/bunker_ros2
+	url = https://wget.la/https://github.com/agilexrobotics/bunker_ros2.git
