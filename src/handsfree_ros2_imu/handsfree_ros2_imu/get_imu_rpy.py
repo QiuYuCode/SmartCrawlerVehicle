@@ -17,7 +17,7 @@ class GetImuRPY(Node):
         super().__init__('get_imu_rpy')
         
         # 声明参数
-        self.declare_parameter('imu_topic', '/handsfree/imu')
+        self.declare_parameter('imu_topic', '/imu')
         
         # 获取参数
         imu_topic = self.get_parameter('imu_topic').get_parameter_value().string_value

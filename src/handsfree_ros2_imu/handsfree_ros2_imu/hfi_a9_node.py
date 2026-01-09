@@ -67,8 +67,8 @@ class HFIA9Node(Node):
         self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
         
         # 创建发布者
-        self.imu_pub = self.create_publisher(Imu, 'handsfree/imu', 10)
-        self.mag_pub = self.create_publisher(MagneticField, 'handsfree/mag', 10)
+        self.imu_pub = self.create_publisher(Imu, '/imu', 10)
+        self.mag_pub = self.create_publisher(MagneticField, '/mag', 10)
         
         # 初始化数据缓冲
         self.key = 0
