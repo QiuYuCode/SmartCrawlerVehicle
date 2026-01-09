@@ -1,52 +1,113 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
 import serial
 import time
+import struct
+import fcntl
+import array
 
-# 初始化串口（操作的是工控机的232串口，对应COM口根据实际情况改，比如COM3、/dev/ttyS1）
-# 参数必须和步进驱动器的485通信参数一致
-ser = serial.Serial(
-    port='/dev/ttyS0',          # 工控机的232串口编号（Windows），Linux下是/dev/ttyS*
-    baudrate=9600,       # 匹配步进驱动器的波特率
-    bytesize=serial.EIGHTBITS,  # 8位数据位
-    parity=serial.PARITY_NONE,  # 无校验
-    stopbits=serial.STOPBITS_ONE, # 1位停止位
-    timeout=0.1,         # 接收超时时间
-    rtscts=False         # 手动控制RTS引脚（用于485收发方向）
-)
+# 配置部分
+PORT = '/dev/ttyS0'
+BAUDRATE = 9600
+SLAVE_ID = 1
 
-def send_485_command(command_bytes):
-    """
-    向485总线发送指令（控制步进驱动器）
-    :param command_bytes: 步进驱动器的控制指令（字节类型，需按驱动器协议来）
-    """
-    # 1. 控制RTS引脚为高电平（打开485发送方向，不同转换器可能是低电平，需测试）
-    ser.rts = True
-    time.sleep(0.001)  # 延时确保方向切换完成
-    
-    # 2. 发送指令（本质是向232串口发数据，硬件自动转485）
-    ser.write(command_bytes)
-    ser.flush()  # 确保数据全部发送
-    
-    # 3. 延时等待发送完成，再切换回接收方向
-    time.sleep(0.001)
-    ser.rts = False  # RTS低电平，切换为接收方向
+# 构造读取状态指令: [ID, 03, 00, 04, 00, 01, CRC_L, CRC_H]
+# 01 03 00 04 00 01 -> CRC=0x0BC9 -> Low=C9, High=0B
+CMD_READ_STATUS = bytes([0x01, 0x03, 0x00, 0x04, 0x00, 0x01, 0xC9, 0x0B])
 
-def read_485_response():
-    """读取步进驱动器返回的响应数据"""
-
-    response = ser.read(ser.in_waiting)
-    return response
-
-
-# 示例：发送步进驱动器的控制指令（指令格式需按你的驱动器手册改）
-if __name__ == "__main__":
+def test_mode_1_direct():
+    """模式1: 直接读取 (适用于带自动收发转换器的硬件)"""
+    print("-" * 30)
+    print("模式 1: 直接读取 (无 RTS 控制)...")
     try:
-        # 假设步进驱动器的“正转100步”指令是 0x01 0x02 0x64 0x00（仅示例，以手册为准）
-        step_command = bytes([0x01, 0x03 ,0x00 ,0x03 ,0x00 ,0x10 ,0xb4 ,0x06])
-        send_485_command(step_command)
+        ser = serial.Serial(PORT, BAUDRATE, timeout=1.0)
+        ser.reset_input_buffer()
+        ser.write(CMD_READ_STATUS)
+        # 不进行任何RTS操作，直接读
+        data = ser.read(7) 
+        if data:
+            print(f"✅ 成功收到数据: {data.hex()}")
+        else:
+            print("❌ 超时，无数据")
+        ser.close()
+    except Exception as e:
+        print(f"❌ 错误: {e}")
+
+def test_mode_2_manual_rts():
+    """模式2: 手动 RTS 翻转 (适用于无源 232转485)"""
+    print("-" * 30)
+    print("模式 2: 手动 RTS 控制 (Python层)...")
+    try:
+        ser = serial.Serial(PORT, BAUDRATE, timeout=1.0, rtscts=False)
         
-        # 读取响应
-        response = read_485_response()
-        print(f"驱动器响应：{response.hex()}")
+        # 发送前拉高 RTS (发送模式)
+        ser.rts = True
+        time.sleep(0.005) 
+        ser.write(CMD_READ_STATUS)
         
-    finally:
-        ser.close()  # 关闭串口
+        # 关键：等待发送完毕。ttyS0 必须要 flush
+        ser.flush() 
+        # time.sleep(0.001) # 微调：如果flush后还有延迟，这里由于是物理口，可能不需要
+        
+        # 发送后拉低 RTS (接收模式)
+        ser.rts = False
+        
+        data = ser.read(7)
+        if data:
+            print(f"✅ 成功收到数据: {data.hex()}")
+        else:
+            print("❌ 超时，无数据")
+        ser.close()
+    except Exception as e:
+        print(f"❌ 错误: {e}")
+
+def test_mode_3_kernel_rs485():
+    """模式3: Linux 内核级 RS485 模式 (推荐用于工控机原生485口)"""
+    print("-" * 30)
+    print("模式 3: Linux 内核 RS485 模式...")
+    try:
+        ser = serial.Serial(PORT, BAUDRATE, timeout=1.0)
+        
+        # 尝试通过 ioctl 开启内核 RS485 支持
+        # struct serial_rs485 (flags, delay_rts_before_send, delay_rts_after_send, padding...)
+        # SER_RS485_ENABLED = 1, SER_RS485_RTS_ON_SEND = 2, SER_RS485_RTS_AFTER_SEND = 4
+        # 许多工控机 ttyS0 支持这个
+        try:
+            import fcntl
+            import struct
+            TIOCSRS485 = 0x542F
+            SER_RS485_ENABLED = 1
+            SER_RS485_RTS_ON_SEND = 2
+            SER_RS485_RTS_AFTER_SEND = 4
+            
+            # 配置：使能485，发送时RTS拉高，发送后拉低
+            flags = SER_RS485_ENABLED | SER_RS485_RTS_ON_SEND
+            # 有些驱动可能需要反向逻辑，如果不行尝试: flags = SER_RS485_ENABLED | SER_RS485_RTS_AFTER_SEND
+            
+            serial_rs485 = struct.pack('IIIIIQ', flags, 0, 0, 0, 0, 0)
+            fcntl.ioctl(ser.fd, TIOCSRS485, serial_rs485)
+            print("   (内核 RS485 模式设置成功)")
+        except Exception as e:
+            print(f"   (内核 RS485 设置失败或不支持: {e})")
+            print("   (跳过此模式测试)")
+            ser.close()
+            return
+
+        ser.reset_input_buffer()
+        ser.write(CMD_READ_STATUS)
+        data = ser.read(7)
+        if data:
+            print(f"✅ 成功收到数据: {data.hex()}")
+        else:
+            print("❌ 超时，无数据")
+        ser.close()
+    except Exception as e:
+        print(f"❌ 错误: {e}")
+
+if __name__ == "__main__":
+    print(f"开始测试串口 {PORT} ...请确保电机已上电")
+    test_mode_1_direct()
+    time.sleep(0.5)
+    test_mode_2_manual_rts()
+    time.sleep(0.5)
+    test_mode_3_kernel_rs485()
