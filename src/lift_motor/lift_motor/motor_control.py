@@ -33,7 +33,7 @@ class LiftMotorNode(Node):
         self.declare_parameter('baudrate', 9600)
         self.declare_parameter('default_speed', 60)
         self.declare_parameter('slave_id', 1)
-        self.declare_parameter('disable_limits', True) # 默认启动时关闭限位保护
+        self.declare_parameter('disable_limits', False)
 
         self.port_name = self.get_parameter('port').get_parameter_value().string_value
         self.baudrate = self.get_parameter('baudrate').get_parameter_value().integer_value
@@ -68,7 +68,7 @@ class LiftMotorNode(Node):
             self.command_callback,
             10
         )
-        self.get_logger().info('指令列表: up, down, stop, enable, disable, status')
+        self.get_logger().info('指令列表: up, down, stop, origin, enable, disable')
         self.get_logger().info('移动指令: move 10000 (正数向上, 负数向下)')
 
     def calculate_crc(self, data):
@@ -135,16 +135,25 @@ class LiftMotorNode(Node):
         self.get_logger().info(f'>>> 限位保护已{state} (Reg 0x0018={val})')
 
     def set_enable(self, enable: bool):
+        """使能或释放电机 (寄存器 0x0039)"""
         val = 1 if enable else 0
         self.send_modbus_write(REG_ENABLE, val)
         self.get_logger().info(f'电机状态: {"使能(锁轴)" if enable else "释放(脱机)"}')
 
     def set_speed_mode(self, speed_rpm):
+        """最大速度设置，默认最大值为 60 RPM r/min
+        :param speed_rpm: 速度 (单位: RPM)
+        """
         self.send_modbus_write(REG_MAX_SPEED, int(speed_rpm))
         self.send_modbus_write(REG_ENABLE, 1)
         self.send_modbus_write(REG_START_CMD, 1)
 
     def move_relative(self, pulses, speed_rpm):
+        """相对运动模式
+
+        :param pulses: 脉冲数
+        :param speed_rpm: 速度 (单位: RPM)
+        """
         self.send_modbus_write(REG_MAX_SPEED, abs(int(speed_rpm)))
         val = int(pulses) & 0xFFFFFFFF
         self.send_modbus_write(REG_PULSE_LOW, val & 0xFFFF)
@@ -153,28 +162,42 @@ class LiftMotorNode(Node):
         self.send_modbus_write(REG_START_CMD, 2)
         self.get_logger().info(f'执行相对运动: {pulses} 脉冲')
 
+    def move_absolute(self, position_pulses, speed_rpm):
+        """绝对运动模式 (移动到指定坐标)
+
+        :param position_pulses: 目标绝对位置 (脉冲数)
+        :param speed_rpm: 速度 (单位: RPM)
+        """
+        # 1. 设置速度 (0x0033)
+        self.send_modbus_write(REG_MAX_SPEED, abs(int(speed_rpm)))
+        
+        # 2. 设置目标绝对位置 (0x0034, 0x0035)
+        # Python 的 & 0xFFFFFFFF 会自动处理负数补码，无需手动计算
+        val = int(position_pulses) & 0xFFFFFFFF
+        self.send_modbus_write(REG_PULSE_LOW, val & 0xFFFF)
+        self.send_modbus_write(REG_PULSE_HIGH, (val >> 16) & 0xFFFF)
+        
+        # 3. 使能电机 (0x0039)
+        self.send_modbus_write(REG_ENABLE, 1)
+        
+        # 4. 发送启动命令 (0x0037)
+        # 值为 4 (二进制 100) 代表绝对位置模式触发
+        self.send_modbus_write(REG_START_CMD, 4)
+        
+        self.get_logger().info(f'执行绝对运动 -> 目标位置: {position_pulses}')
+    
     def stop_motor(self):
+        """停止电机动作"""
         self.send_modbus_write(REG_STOP_CMD, 0)
+        self.get_logger().info('电机停止')
 
-    def check_status(self):
-        """查询驱动器状态"""
-        status = self.read_modbus_register(REG_STATUS)
-        inputs = self.read_modbus_register(REG_INPUT_STATE)
-        
-        if status is not None:
-            is_alarm = (status >> 6) & 0x01
-            self.get_logger().info(f'--- 驱动器状态 (0x0004): {hex(status)} ---')
-            self.get_logger().info(f'  报警状态: {"异常!" if is_alarm else "正常"}')
-        
-        if inputs is not None:
-            # Bit2: X2(正限位), Bit3: X3(负限位)
-            x2 = (inputs >> 2) & 0x01
-            x3 = (inputs >> 3) & 0x01
-            self.get_logger().info(f'--- 输入端口 (0x0009): {hex(inputs)} ---')
-            self.get_logger().info(f'  正限位(X2): {"触发" if x2 else "无效"}')
-            self.get_logger().info(f'  负限位(X3): {"触发" if x3 else "无效"}')
-
+    def back_to_origin(self):
+        """回原点模式触发"""
+        self.send_modbus_write(REG_START_CMD, 8)
+        self.get_logger().info(f"回原点模式启动")
+    
     def command_callback(self, msg):
+        """ros 处理指令回调"""
         cmd_str = msg.data.lower().strip()
         parts = cmd_str.split()
         cmd = parts[0]
@@ -189,13 +212,20 @@ class LiftMotorNode(Node):
             self.set_speed_mode(-self.default_speed)
         elif cmd == 'stop':
             self.stop_motor()
-        elif cmd == 'status':
-            self.check_status()
+        elif cmd == 'origin':
+            self.back_to_origin()
         elif cmd == 'move' and len(parts) > 1:
+            # 相对运动: move 1000 (当前位置 + 1000)
             try:
                 self.move_relative(int(parts[1]), self.default_speed)
             except ValueError:
-                self.get_logger().error('脉冲格式错误')
+                self.get_logger().error('相对运动参数错误')
+        elif cmd == 'abs' and len(parts) > 1:
+            # [新增] 绝对运动: abs 5000 (移动到坐标 5000)
+            try:
+                self.move_absolute(int(parts[1]), self.default_speed)
+            except ValueError:
+                self.get_logger().error('绝对运动参数错误')
         else:
             self.get_logger().warn(f'未知指令: {cmd_str}')
 
