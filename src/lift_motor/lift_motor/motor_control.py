@@ -14,15 +14,21 @@ FUNC_READ_HOLDING = 0x03  # 读保持寄存器
 FUNC_WRITE_SINGLE = 0x06  # 写单个寄存器
 
 # 寄存器地址定义 (基于 RSA86E 手册)
-REG_STATUS       = 0x0004    # 驱动器状态 (Bit4-5:方向, Bit6:报警)
-REG_INPUT_STATE  = 0x0009    # 输入端口状态 (查看限位开关)
-REG_LIMIT_CFG    = 0x0018    # 超程停车功能 (Bit1:硬限位, Bit2:软限位)
-REG_MAX_SPEED    = 0x0033    # 最大速度
-REG_PULSE_LOW    = 0x0034    # 总脉冲数低16位
-REG_PULSE_HIGH   = 0x0035    # 总脉冲数高16位
-REG_START_CMD    = 0x0037    # 启动命令
-REG_STOP_CMD     = 0x0038    # 停止命令
-REG_ENABLE       = 0x0039    # 使能控制
+REG_WORK_MODE          = 0x0003    # 驱动器工作模式
+REG_DRIVE_STATUS       = 0x0004    # 驱动器状态 (Bit4-5:0-无)
+REG_INPUT_STATE        = 0x0009    # 输入端口状态 (查看限位开关)
+REG_LIMIT_CFG          = 0x0018    # 超程停车功能 (Bit1:硬限位, Bit2:软限位)
+REG_MAX_SPEED          = 0x0033    # 最大速度
+REG_PULSE_LOW          = 0x0034    # 总脉冲数低16位
+REG_PULSE_HIGH         = 0x0035    # 总脉冲数高16位
+REG_START_CMD          = 0x0037    # 启动命令
+REG_STOP_CMD           = 0x0038    # 停止命令
+REG_ENABLE             = 0x0039    # 使能控制
+REG_CLR_ALARM          = 0x0019    # 报警清除/位置清零
+
+# 错误代码定义
+REG_CUR_POS_L = 0x0007    # 当前绝对位置低16位
+REG_CUR_POS_H = 0x0008    # 当前绝对位置高16位
 
 class LiftMotorNode(Node):
     def __init__(self):
@@ -49,7 +55,7 @@ class LiftMotorNode(Node):
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=0.1
+                timeout=0.03
             )
             self.get_logger().info(f'串口已打开: {self.port_name}')
         except Exception as e:
@@ -58,7 +64,7 @@ class LiftMotorNode(Node):
 
         # 启动时处理限位设置
         if disable_limits:
-            time.sleep(0.1) # 等待串口稳定
+            time.sleep(0.03) # 等待串口稳定
             self.set_limit_protection(False)
 
         # 订阅指令
@@ -97,7 +103,7 @@ class LiftMotorNode(Node):
 
         try:
             self.ser.write(frame)
-            time.sleep(0.02)
+            time.sleep(0.03)
         except Exception as e:
             self.get_logger().error(f'发送失败: {e}')
 
@@ -112,7 +118,7 @@ class LiftMotorNode(Node):
         try:
             self.ser.flushInput()
             self.ser.write(frame)
-            time.sleep(0.05)
+            time.sleep(0.03)
             response = self.ser.read(7) # 地址(1)+功能(1)+字节数(1)+数据(2)+CRC(2)
             if len(response) == 7:
                 # 简单解析
@@ -196,6 +202,30 @@ class LiftMotorNode(Node):
         self.send_modbus_write(REG_START_CMD, 8)
         self.get_logger().info(f"回原点模式启动")
     
+    def check_status(self):
+        """读取状态和当前位置"""
+        status = self.read_modbus_register(REG_DRIVE_STATUS)
+        pos_l = self.read_modbus_register(REG_CUR_POS_L) # 0x0007
+        pos_h = self.read_modbus_register(REG_CUR_POS_H) # 0x0008
+        
+        current_pos = 0
+        if pos_l is not None and pos_h is not None:
+            # 拼接32位有符号整数
+            current_pos = (pos_h << 16) | pos_l
+            if current_pos & 0x80000000:
+                current_pos -= 0x100000000
+                
+        self.get_logger().info(f'-----------------------')
+        self.get_logger().info(f'驱动器状态寄存器: {status if status else "None"}')
+        self.get_logger().info(f'当前状态: {current_pos}')
+        self.get_logger().info(f'-----------------------')
+    
+    def clear_position(self):
+        """尝试强制清零当前位置"""
+        # 写入 0x0019 (报警清除/位置清零)
+        self.send_modbus_write(REG_CLR_ALARM, 1) 
+        self.get_logger().info('已发送位置清零/报警清除指令 (Reg 0x0019 = 1)')
+    
     def command_callback(self, msg):
         """ros 处理指令回调"""
         cmd_str = msg.data.lower().strip()
@@ -214,6 +244,10 @@ class LiftMotorNode(Node):
             self.stop_motor()
         elif cmd == 'origin':
             self.back_to_origin()
+        elif cmd == 'status':
+            self.check_status()
+        elif cmd == 'clear':
+            self.clear_position()
         elif cmd == 'move' and len(parts) > 1:
             # 相对运动: move 1000 (当前位置 + 1000)
             try:
