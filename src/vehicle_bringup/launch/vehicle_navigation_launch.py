@@ -10,9 +10,14 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
+
+
+def _as_bool(launch_config: LaunchConfiguration) -> PythonExpression:
+    # Normalize common truthy strings to Python's True/False (for downstream PythonExpression usage).
+    return PythonExpression(["'", launch_config, "'.lower() in ['true', '1', 'yes']"])
 
 
 def generate_launch_description():
@@ -77,12 +82,16 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration('use_rviz')
     namespace = LaunchConfiguration('namespace')
 
+    use_sim_time_bool = _as_bool(use_sim_time)
+    autostart_bool = _as_bool(autostart)
+    use_composition_bool = _as_bool(use_composition)
+
     # 创建参数文件（动态设置 use_sim_time）
     configured_params = RewrittenYaml(
         source_file=params_file,
         root_key=namespace,
-        param_rewrites={'use_sim_time': use_sim_time},
-        convert_types=False
+        param_rewrites={'use_sim_time': use_sim_time_bool},
+        convert_types=True
     )
 
     # 启动 Localization (AMCL)
@@ -93,10 +102,10 @@ def generate_launch_description():
         launch_arguments={
             'namespace': namespace,
             'map': map_yaml_file,
-            'use_sim_time': use_sim_time,
-            'autostart': autostart,
+            'use_sim_time': use_sim_time_bool,
+            'autostart': autostart_bool,
             'params_file': configured_params,
-            'use_composition': use_composition,
+            'use_composition': use_composition_bool,
         }.items()
     )
 
@@ -107,10 +116,10 @@ def generate_launch_description():
         ),
         launch_arguments={
             'namespace': namespace,
-            'use_sim_time': use_sim_time,
-            'autostart': autostart,
+            'use_sim_time': use_sim_time_bool,
+            'autostart': autostart_bool,
             'params_file': configured_params,
-            'use_composition': use_composition,
+            'use_composition': use_composition_bool,
         }.items()
     )
 
@@ -120,7 +129,7 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz2',
         arguments=['-d', rviz_config_file],
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{'use_sim_time': use_sim_time_bool}],
         output='screen',
         condition=IfCondition(use_rviz)
     )
