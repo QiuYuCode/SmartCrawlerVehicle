@@ -21,14 +21,14 @@ ros2 launch vehicle_bringup vehicle_slam_launch.py
 
 3. 在建图完成后，保存地图到此目录：
 ```bash
-ros2 run nav2_map_server map_saver_cli -f /path/to/SmartCrawlerVehicle/src/vehicle_bringup/maps/my_map
+ros2 run nav2_map_server map_saver_cli -f /home/krtrobot/WorkSpace/SmartCrawlerVehicle/src/vehicle_bringup/maps/my_map
 ```
 
 ## 使用地图进行导航
 
 使用保存的地图启动导航：
 ```bash
-ros2 launch vehicle_bringup vehicle_localization_navigation_launch.py map:=/path/to/map.yaml
+ros2 launch vehicle_bringup vehicle_localization_navigation_launch.py map:=/home/krtrobot/WorkSpace/SmartCrawlerVehicle/src/vehicle_bringup/maps/my_map.yaml
 ```
 
 或者使用默认地图名称 `map.yaml`（如果存在）：

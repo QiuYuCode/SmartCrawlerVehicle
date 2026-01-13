@@ -82,7 +82,7 @@ def generate_launch_description():
         source_file=params_file,
         root_key=namespace,
         param_rewrites={'use_sim_time': use_sim_time},
-        convert_types=True
+        convert_types=False
     )
 
     # 启动 Localization (AMCL)

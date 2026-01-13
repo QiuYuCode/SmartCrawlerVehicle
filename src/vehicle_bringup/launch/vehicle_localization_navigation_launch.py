@@ -89,7 +89,7 @@ def generate_launch_description():
         source_file=params_file,
         root_key='',
         param_rewrites={'use_sim_time': use_sim_time},
-        convert_types=True
+        convert_types=False
     )
 
     # ========== 机器人和传感器节点 ==========
