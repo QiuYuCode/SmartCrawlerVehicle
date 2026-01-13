@@ -352,6 +352,90 @@ rviz2 -d src/vehicle_bringup/rviz/vehicle_slam.rviz  # 如果有配置文件
 - `map_update_interval`：地图更新间隔（默认 5.0s）
 - `throttle_scans`：跳过扫描数（降低计算负载）
 
+#### Navigation2 自主导航
+
+完成 SLAM 建图并保存地图后，可以使用 Navigation2 进行自主导航。
+
+##### 启动自主导航系统
+
+```bash
+# 方式1：完整系统（包含底盘、传感器、定位和导航）
+ros2 launch vehicle_bringup vehicle_localization_navigation_launch.py
+
+# 方式2：使用自定义地图
+ros2 launch vehicle_bringup vehicle_localization_navigation_launch.py \
+  map:=/path/to/your/map.yaml
+
+# 方式3：仅启动导航栈（假设已有定位源）
+ros2 launch vehicle_bringup vehicle_navigation_launch.py
+
+# 方式4：不启动 RViz
+ros2 launch vehicle_bringup vehicle_localization_navigation_launch.py use_rviz:=false
+```
+
+##### 使用导航功能
+
+在 RViz2 中：
+1. 使用 "2D Pose Estimate" 工具设置机器人初始位置
+2. 使用 "2D Goal Pose" 工具设置导航目标点
+3. 机器人将自动规划路径并导航到目标位置
+
+通过命令行发送导航目标：
+```bash
+# 发送单个目标点
+ros2 topic pub /goal_pose geometry_msgs/PoseStamped \
+  "header:
+    frame_id: 'map'
+  pose:
+    position: {x: 1.0, y: 2.0, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}"
+
+# 多点导航（航点跟随）
+ros2 action send_goal /follow_waypoints nav2_msgs/action/FollowWaypoints \
+  "{poses: [{header: {frame_id: 'map'}, pose: {position: {x: 1.0, y: 1.0, z: 0.0}}},
+            {header: {frame_id: 'map'}, pose: {position: {x: 2.0, y: 2.0, z: 0.0}}}]}"
+```
+
+##### 导航参数调优
+
+配置文件：`src/vehicle_bringup/config/nav2_params.yaml`
+
+详细的参数说明和调优指南请参考：`src/vehicle_bringup/config/README_NAV2.md`
+
+关键参数包括：
+- **机器人尺寸**：`robot_radius`（0.35m）、`inflation_radius`（0.55m）
+- **速度限制**：`max_vel_x`（0.5 m/s）、`max_vel_theta`（1.0 rad/s）
+- **目标容差**：`xy_goal_tolerance`（0.15m）、`yaw_goal_tolerance`（0.2 rad）
+- **代价地图**：更新频率、分辨率、障碍物层配置
+
+##### 导航行为
+
+Navigation2 提供多种恢复行为：
+- **Spin**：原地旋转以获取更多环境信息
+- **Backup**：后退以脱离困境
+- **Wait**：等待障碍物清除
+- **Drive on Heading**：按指定方向直线行驶
+
+##### 监控导航状态
+
+```bash
+# 查看导航状态
+ros2 topic echo /behavior_tree_log
+
+# 查看当前路径
+ros2 topic echo /plan
+
+# 查看局部代价地图
+ros2 topic echo /local_costmap/costmap
+
+# 查看全局代价地图
+ros2 topic echo /global_costmap/costmap
+```
+
+更多详细信息请查看：
+- 导航配置说明：`src/vehicle_bringup/config/README_NAV2.md`
+- 地图文件说明：`src/vehicle_bringup/maps/README.md`
+
 ### 7. 键盘遥控
 
 ```bash
@@ -468,7 +552,50 @@ ros2 topic echo /imu
    - 增加 `map_update_interval`（减轻 CPU 负担）
    - 检查激光雷达安装是否水平稳定
 
-### Q7: 编译错误
+### Q7: Navigation2 导航失败或路径规划问题
+
+**常见问题及解决方案**：
+
+1. **机器人不移动/导航失败**
+   ```bash
+   # 检查定位是否正常
+   ros2 topic echo /amcl_pose
+
+   # 检查是否发送了导航目标
+   ros2 topic echo /goal_pose
+
+   # 查看导航状态
+   ros2 topic echo /navigate_to_pose/_action/status
+   ```
+
+2. **路径规划失败**
+   - 检查地图是否正确加载：`ros2 topic echo /map`
+   - 确保机器人初始位置准确（使用 2D Pose Estimate）
+   - 调整 `robot_radius` 和 `inflation_radius`（如果通道太窄）
+   - 确认目标点在地图的可通行区域
+
+3. **机器人振荡或路径抖动**
+   - 降低控制器频率：`controller_frequency: 10.0`（在 nav2_params.yaml）
+   - 增大目标容差：`xy_goal_tolerance: 0.25`
+   - 调整 DWB 评价函数权重
+
+4. **代价地图异常**
+   ```bash
+   # 查看局部代价地图
+   ros2 run nav2_costmap_2d nav2_costmap_2d_markers voxel_grid:=/local_costmap/voxel_grid
+
+   # 检查障碍物检测
+   ros2 topic echo /local_costmap/costmap_updates
+   ```
+
+5. **定位漂移**
+   - 增加 AMCL 粒子数：`max_particles: 3000`
+   - 调整运动模型噪声参数（`alpha1` - `alpha5`）
+   - 确保激光雷达数据质量良好
+
+更多调试技巧请参考：`src/vehicle_bringup/config/README_NAV2.md`
+
+### Q8: 编译错误
 
 ```bash
 # 清理编译缓存
@@ -481,7 +608,7 @@ rosdepc install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --event-handlers console_direct+
 ```
 
-### Q8: 远程连接
+### Q9: 远程连接
 
 在自己的电脑上安装 NoMachine 或者 todesk
 
