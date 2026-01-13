@@ -13,17 +13,58 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from nav2_common.launch import RewrittenYaml
+from launch_ros.parameter_descriptions import ParameterValue
 
 
-def _as_bool(launch_config: LaunchConfiguration) -> PythonExpression:
-    # Normalize common truthy strings to Python's True/False (for downstream PythonExpression usage).
-    return PythonExpression(["'", launch_config, "'.lower() in ['true', '1', 'yes']"])
+def _validate_map_file(context, *args, **kwargs):
+    map_yaml_path = LaunchConfiguration('map').perform(context)
+    if not map_yaml_path:
+        raise RuntimeError(
+            "Launch argument 'map' is empty. Please pass a valid map yaml, e.g. "
+            "`ros2 launch vehicle_bringup vehicle_localization_navigation_launch.py map:=/path/to/map.yaml`."
+        )
+
+    if not os.path.isabs(map_yaml_path):
+        map_yaml_path = os.path.abspath(map_yaml_path)
+
+    if not os.path.exists(map_yaml_path):
+        raise RuntimeError(
+            f"Map yaml file not found: {map_yaml_path}\n"
+            "请先用 SLAM 建图并保存地图（会生成 .yaml + .pgm），或启动时传参 map:=/path/to/xxx.yaml。\n"
+            "示例：`ros2 run nav2_map_server map_saver_cli -f <your_path_no_ext>`"
+        )
+
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return []
+
+    try:
+        with open(map_yaml_path, 'r', encoding='utf-8') as f:
+            map_yaml = yaml.safe_load(f) or {}
+    except Exception as e:
+        raise RuntimeError(f"Failed to read/parse map yaml: {map_yaml_path}\n{e}") from e
+
+    image_field = map_yaml.get('image')
+    if not image_field:
+        return []
+
+    image_path = image_field
+    if not os.path.isabs(image_path):
+        image_path = os.path.join(os.path.dirname(map_yaml_path), image_path)
+
+    if not os.path.exists(image_path):
+        raise RuntimeError(
+            f"Map image referenced by yaml does not exist: {image_path}\n"
+            f"(from yaml: {map_yaml_path})"
+        )
+
+    return []
 
 
 def generate_launch_description():
@@ -38,7 +79,7 @@ def generate_launch_description():
     urdf_file = os.path.join(pkg_vehicle_bringup, 'description', 'vehicle.urdf')
     nav2_params_file = os.path.join(pkg_vehicle_bringup, 'config', 'nav2_params.yaml')
     default_map_file = os.path.join(pkg_vehicle_bringup, 'maps', 'map.yaml')
-    rviz_config_file = os.path.join(pkg_vehicle_bringup, 'config', 'nav2_default_view.rviz')
+    rviz_config_file = os.path.join(pkg_nav2_bringup, 'rviz', 'nav2_default_view.rviz')
 
     # 读取 URDF
     with open(urdf_file, 'r') as infp:
@@ -89,18 +130,6 @@ def generate_launch_description():
     use_composition = LaunchConfiguration('use_composition')
     use_rviz = LaunchConfiguration('use_rviz')
 
-    use_sim_time_bool = _as_bool(use_sim_time)
-    autostart_bool = _as_bool(autostart)
-    use_composition_bool = _as_bool(use_composition)
-
-    # 创建参数文件（动态设置 use_sim_time）
-    configured_params = RewrittenYaml(
-        source_file=params_file,
-        root_key='',
-        param_rewrites={'use_sim_time': use_sim_time_bool},
-        convert_types=True
-    )
-
     # ========== 机器人和传感器节点 ==========
 
     # 机器人状态发布者
@@ -147,10 +176,10 @@ def generate_launch_description():
         launch_arguments={
             'namespace': '',
             'map': map_yaml_file,
-            'use_sim_time': use_sim_time_bool,
-            'autostart': autostart_bool,
-            'params_file': configured_params,
-            'use_composition': use_composition_bool,
+            'use_sim_time': use_sim_time,
+            'autostart': autostart,
+            'params_file': params_file,
+            'use_composition': use_composition,
         }.items()
     )
 
@@ -161,10 +190,10 @@ def generate_launch_description():
         ),
         launch_arguments={
             'namespace': '',
-            'use_sim_time': use_sim_time_bool,
-            'autostart': autostart_bool,
-            'params_file': configured_params,
-            'use_composition': use_composition_bool,
+            'use_sim_time': use_sim_time,
+            'autostart': autostart,
+            'params_file': params_file,
+            'use_composition': use_composition,
         }.items()
     )
 
@@ -174,7 +203,7 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz2',
         arguments=['-d', rviz_config_file],
-        parameters=[{'use_sim_time': use_sim_time_bool}],
+        parameters=[{'use_sim_time': ParameterValue(use_sim_time, value_type=bool)}],
         output='screen',
         condition=IfCondition(use_rviz)
     )
@@ -187,6 +216,9 @@ def generate_launch_description():
         declare_autostart_arg,
         declare_use_composition_arg,
         declare_use_rviz_arg,
+
+        # 启动前校验地图文件是否存在（否则 map_server 无法发布 /map）
+        OpaqueFunction(function=_validate_map_file),
 
         # 启动机器人和传感器
         robot_state_publisher_node,
