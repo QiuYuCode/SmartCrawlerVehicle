@@ -631,3 +631,5 @@ MigrationBackup/
 .cursor/
 .claude/
 .codex/
+CLAUDE.md
+GEMINI.md
